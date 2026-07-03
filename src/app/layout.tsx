@@ -16,6 +16,17 @@ export const metadata: Metadata = {
   title: "Audio Workout PWA",
   description: "Create and play audio workouts with accurate Web Audio scheduling.",
   metadataBase: new URL("https://audio-workout-pwa.vercel.app"),
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+  manifest: "/manifest.webmanifest",
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#0f172a",
 };
 
 export default function RootLayout({
@@ -28,11 +39,6 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <head>
-        <link rel="manifest" href="/manifest.webmanifest" />
-        <meta name="theme-color" content="#0f172a" />
-        <link rel="apple-touch-icon" href="/icon.svg" />
-      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

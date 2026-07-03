@@ -3,21 +3,30 @@ export interface VoicePrompt {
   text: string;
 }
 
+export type OverlayType = "metronome" | "interval" | "countdown" | "audio";
+
+export interface OverlayConfig {
+  id: string;
+  type: OverlayType;
+  bpm?: number;
+  intervalSeconds?: number;
+  startAtSec?: number;
+  repeatEverySec?: number;
+  label?: string;
+  audioBuffer?: AudioBuffer | null;
+}
+
 export interface WorkoutConfig {
-  bpm: number;
-  metronomeEnabled: boolean;
-  intervalEnabled: boolean;
-  intervalSeconds: number;
-  countdownEnabled: boolean;
+  durationSeconds: number;
+  overlays: OverlayConfig[];
   voicePrompts: VoicePrompt[];
 }
 
 export class AudioWorkoutEngine {
   private context: AudioContext | null = null;
   private source: AudioBufferSourceNode | null = null;
-  private scheduledTimeouts: number[] = [];
+  private scheduledNodes: AudioScheduledSourceNode[] = [];
   private speechTimeouts: number[] = [];
-  private endResolver: (() => void) | null = null;
 
   private getContext() {
     if (!this.context) {
@@ -38,7 +47,21 @@ export class AudioWorkoutEngine {
     return await ctx.decodeAudioData(arrayBuffer);
   }
 
-  private scheduleOscillatorAtTime(startTime: number, frequency = 880, duration = 0.12) {
+  async createSilentBuffer(durationSeconds: number) {
+    await this.resumeContext();
+    const ctx = this.getContext();
+    const length = Math.max(1, Math.floor(durationSeconds * ctx.sampleRate));
+    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const channelData = buffer.getChannelData(0);
+    channelData.fill(0);
+    return buffer;
+  }
+
+  private scheduleOscillatorAtTime(
+    startTime: number,
+    frequency = 880,
+    duration = 0.12,
+  ) {
     const ctx = this.getContext();
     const oscillator = ctx.createOscillator();
     const gainNode = ctx.createGain();
@@ -53,6 +76,7 @@ export class AudioWorkoutEngine {
     oscillator.connect(gainNode).connect(ctx.destination);
     oscillator.start(startTime);
     oscillator.stop(startTime + duration);
+    this.scheduledNodes.push(oscillator);
   }
 
   private scheduleCountdown(startTime: number) {
@@ -73,12 +97,41 @@ export class AudioWorkoutEngine {
     }
   }
 
-  private scheduleIntervalBeep(startTime: number, duration: number, intervalSeconds: number) {
+  private scheduleIntervalBeep(
+    startTime: number,
+    duration: number,
+    intervalSeconds: number,
+  ) {
     if (intervalSeconds <= 0) return;
     let current = startTime + intervalSeconds;
     while (current < startTime + duration) {
       this.scheduleOscillatorAtTime(current, 620, 0.12);
       current += intervalSeconds;
+    }
+  }
+
+  private scheduleAudioOverlay(
+    startTime: number,
+    duration: number,
+    overlay: OverlayConfig,
+  ) {
+    if (!overlay.audioBuffer) return;
+
+    const ctx = this.getContext();
+    const offset = overlay.startAtSec ?? 0;
+    const repeatEverySec =
+      overlay.repeatEverySec && overlay.repeatEverySec > 0
+        ? overlay.repeatEverySec
+        : 0;
+    let current = startTime + offset;
+
+    while (current < startTime + duration) {
+      const source = ctx.createBufferSource();
+      source.buffer = overlay.audioBuffer;
+      source.connect(ctx.destination);
+      source.start(current);
+      this.scheduledNodes.push(source);
+      current += repeatEverySec > 0 ? repeatEverySec : duration + 1;
     }
   }
 
@@ -110,21 +163,40 @@ export class AudioWorkoutEngine {
   async play(audioBuffer: AudioBuffer, config: WorkoutConfig) {
     await this.resumeContext();
 
+    this.stop();
+
     const ctx = this.getContext();
     const now = ctx.currentTime;
-    const countdownOffset = config.countdownEnabled ? 3.2 : 0;
-    const playbackStartTime = now + 0.5 + countdownOffset;
+    const playbackStartTime = now + 0.5;
 
-    if (config.countdownEnabled) {
-      this.scheduleCountdown(now + 0.5);
-    }
-
-    if (config.metronomeEnabled) {
-      this.scheduleMetronome(playbackStartTime, audioBuffer.duration, config.bpm);
-    }
-
-    if (config.intervalEnabled) {
-      this.scheduleIntervalBeep(playbackStartTime, audioBuffer.duration, config.intervalSeconds);
+    for (const overlay of config.overlays) {
+      const overlayStartTime = playbackStartTime + (overlay.startAtSec ?? 0);
+      switch (overlay.type) {
+        case "metronome":
+          this.scheduleMetronome(
+            overlayStartTime,
+            config.durationSeconds,
+            overlay.bpm ?? 120,
+          );
+          break;
+        case "interval":
+          this.scheduleIntervalBeep(
+            overlayStartTime,
+            config.durationSeconds,
+            overlay.intervalSeconds ?? 30,
+          );
+          break;
+        case "countdown":
+          this.scheduleCountdown(now + 0.5);
+          break;
+        case "audio":
+          this.scheduleAudioOverlay(
+            overlayStartTime,
+            config.durationSeconds,
+            overlay,
+          );
+          break;
+      }
     }
 
     if (config.voicePrompts.length > 0) {
@@ -132,7 +204,6 @@ export class AudioWorkoutEngine {
     }
 
     return new Promise<void>((resolve) => {
-      this.stop();
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(ctx.destination);
@@ -154,13 +225,20 @@ export class AudioWorkoutEngine {
       }
       this.source = null;
     }
-    window.clearTimeouts?.(this.scheduledTimeouts);
+
+    this.scheduledNodes.forEach((node) => {
+      try {
+        node.stop();
+      } catch {
+        // ignore if already stopped or not yet scheduled
+      }
+    });
+    this.scheduledNodes = [];
+
     this.clearScheduledEvents();
   }
 
   private clearScheduledEvents() {
-    this.scheduledTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    this.scheduledTimeouts = [];
     this.speechTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
     this.speechTimeouts = [];
   }
