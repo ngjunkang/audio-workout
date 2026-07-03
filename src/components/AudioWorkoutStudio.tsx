@@ -90,8 +90,8 @@ export default function AudioWorkoutStudio() {
       await engine.play(buffer, config);
       setStatus("Workout finished.");
     } catch (error) {
-      setStatus("Playback failed. Please try again.");
-      console.error(error);
+      console.error("Playback error:", error);
+      setStatus(`Playback failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setIsPlaying(false);
     }

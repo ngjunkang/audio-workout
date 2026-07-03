@@ -38,7 +38,11 @@ export class AudioWorkoutEngine {
   async resumeContext() {
     const ctx = this.getContext();
     if (ctx.state === "suspended") {
-      await ctx.resume();
+      try {
+        await ctx.resume();
+      } catch (error) {
+        console.warn("Failed to resume audio context:", error);
+      }
     }
   }
 
@@ -68,13 +72,15 @@ export class AudioWorkoutEngine {
 
     oscillator.type = "sine";
     oscillator.frequency.value = frequency;
+    
     gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(0.2, startTime + 0.008);
-    gainNode.gain.setValueAtTime(0.2, startTime + duration - 0.02);
+    gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.008);
+    gainNode.gain.setValueAtTime(0.3, startTime + duration - 0.02);
     gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
 
-    oscillator.connect(gainNode).connect(ctx.destination);
-    oscillator.start(startTime);
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    oscillator.start(Math.max(startTime, ctx.currentTime + 0.01));
     oscillator.stop(startTime + duration);
     this.scheduledNodes.push(oscillator);
   }
@@ -167,7 +173,7 @@ export class AudioWorkoutEngine {
 
     const ctx = this.getContext();
     const now = ctx.currentTime;
-    const playbackStartTime = now + 0.5;
+    const playbackStartTime = Math.max(now + 0.1, now + 0.5);
 
     for (const overlay of config.overlays) {
       const overlayStartTime = playbackStartTime + (overlay.startAtSec ?? 0);
@@ -187,7 +193,7 @@ export class AudioWorkoutEngine {
           );
           break;
         case "countdown":
-          this.scheduleCountdown(now + 0.5);
+          this.scheduleCountdown(playbackStartTime - 0.5);
           break;
         case "audio":
           this.scheduleAudioOverlay(
