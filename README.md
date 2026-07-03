@@ -1,37 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Audio Workout PWA
 
-## Getting Started
+A lightweight Progressive Web App for building timed audio workouts with overlays such as a metronome, interval beeps, countdowns, and optional voice prompts.
 
-First, run the development server:
+## Live demo
+
+Open the app at https://audio-workout-xqvh.vercel.app/
+
+## What it does
+
+- Set a workout duration from 30 seconds up to 1 hour
+- Add and configure overlays such as:
+  - Metronome
+  - Interval beeps
+  - Countdown cues
+  - Audio overlays with uploaded audio files
+- Add voice prompts at custom time offsets
+- Play and stop workouts from a simple mobile-friendly interface
+- Install as a PWA on supported devices
+
+## Development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the local development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000 in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+```
 
-## Learn More
+## Mobile audio note
 
-To learn more about Next.js, take a look at the following resources:
+Mobile browsers may require a direct tap before audio playback starts. When using iOS or Android, tap the Play button once and allow the page to begin audio. Voice prompts can also be limited by the browser or WebView environment, so some devices may need a native text-to-speech fallback.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deployment
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-# audio-workout
+This project is designed for deployment on Vercel. The app includes a PWA manifest and service worker for installable/offline-friendly behavior.

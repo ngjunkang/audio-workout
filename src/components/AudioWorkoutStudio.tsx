@@ -92,7 +92,9 @@ export default function AudioWorkoutStudio() {
       setStatus("Workout finished.");
     } catch (error) {
       console.error("Playback error:", error);
-      setStatus(`Playback failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+      setStatus(
+        `Playback failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     } finally {
       setIsPlaying(false);
     }

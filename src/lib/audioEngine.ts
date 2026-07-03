@@ -38,10 +38,17 @@ export class AudioWorkoutEngine {
           ? window.AudioContext
           : undefined) ??
         (typeof window !== "undefined" && "webkitAudioContext" in window
-          ? (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+          ? (
+              window as Window &
+                typeof globalThis & { webkitAudioContext?: typeof AudioContext }
+            ).webkitAudioContext
           : undefined) ??
         (typeof globalThis !== "undefined" && "AudioContext" in globalThis
-          ? (globalThis as typeof globalThis & { AudioContext?: typeof AudioContext }).AudioContext
+          ? (
+              globalThis as typeof globalThis & {
+                AudioContext?: typeof AudioContext;
+              }
+            ).AudioContext
           : undefined);
 
       if (!AudioContextCtor) {
@@ -198,14 +205,19 @@ export class AudioWorkoutEngine {
     }
 
     const synth = window.speechSynthesis;
-    if ((synth as SpeechSynthesis & { __voiceEventsBound?: boolean }).__voiceEventsBound) {
+    if (
+      (synth as SpeechSynthesis & { __voiceEventsBound?: boolean })
+        .__voiceEventsBound
+    ) {
       return;
     }
 
     synth.onvoiceschanged = () => {
       this.loadVoices();
     };
-    (synth as SpeechSynthesis & { __voiceEventsBound?: boolean }).__voiceEventsBound = true;
+    (
+      synth as SpeechSynthesis & { __voiceEventsBound?: boolean }
+    ).__voiceEventsBound = true;
   }
 
   private loadVoices() {
