@@ -82,6 +82,7 @@ export default function AudioWorkoutStudio() {
   };
 
   const handlePlay = async () => {
+    engine.unlockSpeechFromGesture();
     setIsPlaying(true);
     setStatus("Starting workout with your overlays...");
 

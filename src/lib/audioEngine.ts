@@ -28,6 +28,7 @@ export class AudioWorkoutEngine {
   private scheduledNodes: AudioScheduledSourceNode[] = [];
   private speechTimeouts: number[] = [];
   private speechReady = false;
+  private speechGestureUnlocked = false;
   private masterGain: GainNode | null = null;
 
   private getContext() {
@@ -191,7 +192,37 @@ export class AudioWorkoutEngine {
     }
   }
 
-  private prepareSpeechSynthesis() {
+  private bindVoiceEvents() {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return;
+    }
+
+    const synth = window.speechSynthesis;
+    if ((synth as SpeechSynthesis & { __voiceEventsBound?: boolean }).__voiceEventsBound) {
+      return;
+    }
+
+    synth.onvoiceschanged = () => {
+      this.loadVoices();
+    };
+    (synth as SpeechSynthesis & { __voiceEventsBound?: boolean }).__voiceEventsBound = true;
+  }
+
+  private loadVoices() {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return;
+    }
+
+    try {
+      const voices = window.speechSynthesis.getVoices();
+      this.speechReady = voices.length > 0;
+    } catch (error) {
+      console.warn("Speech synthesis voices could not be loaded:", error);
+      this.speechReady = false;
+    }
+  }
+
+  private resetSpeechQueue() {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       return;
     }
@@ -199,6 +230,23 @@ export class AudioWorkoutEngine {
     try {
       const synth = window.speechSynthesis;
       synth.cancel();
+      this.bindVoiceEvents();
+      this.loadVoices();
+    } catch (error) {
+      console.warn("Speech synthesis queue reset failed:", error);
+    }
+  }
+
+  private prepareSpeechSynthesis() {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return;
+    }
+
+    try {
+      const synth = window.speechSynthesis;
+      this.bindVoiceEvents();
+      this.loadVoices();
+
       if (synth.paused) {
         synth.resume();
       }
@@ -209,8 +257,41 @@ export class AudioWorkoutEngine {
     }
   }
 
+  unlockSpeechFromGesture() {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return false;
+    }
+
+    this.resetSpeechQueue();
+    this.prepareSpeechSynthesis();
+
+    try {
+      const synth = window.speechSynthesis;
+      const utterance = new SpeechSynthesisUtterance("Ready");
+      utterance.lang = "en-US";
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utterance.onerror = (event) => {
+        console.warn("Speech synthesis failed:", event.error);
+      };
+
+      synth.speak(utterance);
+      this.speechGestureUnlocked = true;
+      this.speechReady = true;
+      return true;
+    } catch (error) {
+      console.warn("Speech synthesis could not be unlocked:", error);
+      return false;
+    }
+  }
+
   private speakVoicePrompt(text: string) {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return false;
+    }
+
+    if (!this.speechGestureUnlocked) {
       return false;
     }
 
@@ -224,10 +305,6 @@ export class AudioWorkoutEngine {
       utterance.onerror = (event) => {
         console.warn("Speech synthesis failed:", event.error);
       };
-
-      if (!this.speechReady) {
-        this.prepareSpeechSynthesis();
-      }
 
       synth.speak(utterance);
       return true;
@@ -265,6 +342,7 @@ export class AudioWorkoutEngine {
   async play(audioBuffer: AudioBuffer, config: WorkoutConfig) {
     await this.resumeContext();
     await new Promise((resolve) => window.setTimeout(resolve, 120));
+    this.resetSpeechQueue();
     this.prepareSpeechSynthesis();
 
     this.stop();
