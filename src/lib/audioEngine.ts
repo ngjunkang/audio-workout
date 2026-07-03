@@ -27,6 +27,7 @@ export class AudioWorkoutEngine {
   private source: AudioBufferSourceNode | null = null;
   private scheduledNodes: AudioScheduledSourceNode[] = [];
   private speechTimeouts: number[] = [];
+  private speechReady = false;
 
   private getContext() {
     if (!this.context) {
@@ -141,16 +142,62 @@ export class AudioWorkoutEngine {
     }
   }
 
+  private prepareSpeechSynthesis() {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return;
+    }
+
+    try {
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      if (synth.paused) {
+        synth.resume();
+      }
+      this.speechReady = true;
+    } catch (error) {
+      console.warn("Speech synthesis could not be prepared:", error);
+      this.speechReady = false;
+    }
+  }
+
+  private speakVoicePrompt(text: string) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return false;
+    }
+
+    try {
+      const synth = window.speechSynthesis;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "en-US";
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utterance.onerror = (event) => {
+        console.warn("Speech synthesis failed:", event.error);
+      };
+
+      if (!this.speechReady) {
+        this.prepareSpeechSynthesis();
+      }
+
+      synth.speak(utterance);
+      return true;
+    } catch (error) {
+      console.warn("Speech synthesis could not speak:", error);
+      return false;
+    }
+  }
+
   private scheduleVoicePromptAtTime(startTime: number, text: string) {
     const now = this.getContext().currentTime;
     const delayMs = Math.max(0, (startTime - now) * 1000);
 
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       const timeoutId = window.setTimeout(() => {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 1;
-        utterance.pitch = 1;
-        window.speechSynthesis.speak(utterance);
+        const spoke = this.speakVoicePrompt(text);
+        if (!spoke) {
+          this.scheduleOscillatorAtTime(startTime, 440, 0.12);
+        }
       }, delayMs);
       this.speechTimeouts.push(timeoutId);
     } else {
@@ -168,6 +215,7 @@ export class AudioWorkoutEngine {
 
   async play(audioBuffer: AudioBuffer, config: WorkoutConfig) {
     await this.resumeContext();
+    this.prepareSpeechSynthesis();
 
     this.stop();
 
