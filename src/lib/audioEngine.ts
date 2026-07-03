@@ -28,12 +28,40 @@ export class AudioWorkoutEngine {
   private scheduledNodes: AudioScheduledSourceNode[] = [];
   private speechTimeouts: number[] = [];
   private speechReady = false;
+  private masterGain: GainNode | null = null;
 
   private getContext() {
     if (!this.context) {
-      this.context = new AudioContext();
+      const AudioContextCtor =
+        (typeof window !== "undefined" && "AudioContext" in window
+          ? window.AudioContext
+          : undefined) ??
+        (typeof window !== "undefined" && "webkitAudioContext" in window
+          ? (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+          : undefined) ??
+        (typeof globalThis !== "undefined" && "AudioContext" in globalThis
+          ? (globalThis as typeof globalThis & { AudioContext?: typeof AudioContext }).AudioContext
+          : undefined);
+
+      if (!AudioContextCtor) {
+        throw new Error("AudioContext is not supported on this device.");
+      }
+
+      this.context = new AudioContextCtor();
+      this.masterGain = this.context.createGain();
+      this.masterGain.gain.value = 1;
+      this.masterGain.connect(this.context.destination);
     }
     return this.context;
+  }
+
+  private ensureMasterGain(ctx: AudioContext) {
+    if (!this.masterGain) {
+      this.masterGain = ctx.createGain();
+      this.masterGain.gain.value = 1;
+      this.masterGain.connect(ctx.destination);
+    }
+    return this.masterGain;
   }
 
   async resumeContext() {
@@ -70,19 +98,40 @@ export class AudioWorkoutEngine {
     const ctx = this.getContext();
     const oscillator = ctx.createOscillator();
     const gainNode = ctx.createGain();
+    const masterGain = this.ensureMasterGain(ctx);
 
     oscillator.type = "sine";
     oscillator.frequency.value = frequency;
-    
+
     gainNode.gain.setValueAtTime(0, startTime);
     gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.008);
     gainNode.gain.setValueAtTime(0.3, startTime + duration - 0.02);
     gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
 
     oscillator.connect(gainNode);
-    gainNode.connect(ctx.destination);
-    oscillator.start(Math.max(startTime, ctx.currentTime + 0.01));
+    gainNode.connect(masterGain);
+    oscillator.start(Math.max(startTime, ctx.currentTime + 0.02));
     oscillator.stop(startTime + duration);
+    this.scheduledNodes.push(oscillator);
+  }
+
+  private scheduleWarmupBeep(startTime: number) {
+    const ctx = this.getContext();
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    const masterGain = this.ensureMasterGain(ctx);
+
+    oscillator.type = "sine";
+    oscillator.frequency.value = 1046.5;
+
+    gainNode.gain.setValueAtTime(0, startTime);
+    gainNode.gain.linearRampToValueAtTime(0.2, startTime + 0.01);
+    gainNode.gain.linearRampToValueAtTime(0, startTime + 0.12);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(masterGain);
+    oscillator.start(Math.max(startTime, ctx.currentTime + 0.02));
+    oscillator.stop(startTime + 0.12);
     this.scheduledNodes.push(oscillator);
   }
 
@@ -215,6 +264,7 @@ export class AudioWorkoutEngine {
 
   async play(audioBuffer: AudioBuffer, config: WorkoutConfig) {
     await this.resumeContext();
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
     this.prepareSpeechSynthesis();
 
     this.stop();
@@ -222,6 +272,7 @@ export class AudioWorkoutEngine {
     const ctx = this.getContext();
     const now = ctx.currentTime;
     const playbackStartTime = Math.max(now + 0.1, now + 0.5);
+    this.scheduleWarmupBeep(playbackStartTime);
 
     for (const overlay of config.overlays) {
       const overlayStartTime = playbackStartTime + (overlay.startAtSec ?? 0);
