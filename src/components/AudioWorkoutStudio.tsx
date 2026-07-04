@@ -61,11 +61,34 @@ const decodeWorkoutPlan = (value: string): WorkoutPlan => {
   }
 };
 
-const getInitialSegments = () => [createSegment()];
+const getInitialSegments = (encodedPlan?: string) => {
+  if (!encodedPlan) {
+    return [createSegment()];
+  }
 
-export default function AudioWorkoutStudio() {
+  try {
+    const parsedPlan = decodeWorkoutPlan(encodedPlan);
+    if (parsedPlan.segments?.length) {
+      return parsedPlan.segments;
+    }
+  } catch (error) {
+    console.warn("Could not load workout from URL", error);
+  }
+
+  return [createSegment()];
+};
+
+type AudioWorkoutStudioProps = {
+  initialEncodedPlan?: string;
+};
+
+export default function AudioWorkoutStudio({
+  initialEncodedPlan,
+}: AudioWorkoutStudioProps) {
   const engine = useMemo(() => new AudioWorkoutEngine(), []);
-  const [segments, setSegments] = useState<SegmentConfig[]>(getInitialSegments);
+  const [segments, setSegments] = useState<SegmentConfig[]>(() =>
+    getInitialSegments(initialEncodedPlan),
+  );
   const [overlayTypeToAdd, setOverlayTypeToAdd] =
     useState<OverlayType>("interval");
   const [isRendering, setIsRendering] = useState(false);
@@ -73,24 +96,6 @@ export default function AudioWorkoutStudio() {
   const [status, setStatus] = useState(
     "Build a timeline, then render and play your workout.",
   );
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const params = new URLSearchParams(window.location.search);
-    const encodedPlan = params.get("plan");
-
-    if (encodedPlan) {
-      try {
-        const parsedPlan = decodeWorkoutPlan(encodedPlan);
-        if (parsedPlan.segments?.length) {
-          setSegments(parsedPlan.segments);
-        }
-      } catch (error) {
-        console.warn("Could not load workout from URL", error);
-      }
-    }
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
