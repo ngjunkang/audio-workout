@@ -173,7 +173,14 @@ export default function AudioWorkoutStudio({
 
   const handleRenderAndPlay = async () => {
     setIsRendering(true);
-    setStatus("Rendering your workout into one audio track...");
+    const hasVoiceCue = plan.segments.some((segment) =>
+      segment.overlays.some((overlay) => overlay.type === "voice"),
+    );
+    setStatus(
+      hasVoiceCue
+        ? "Loading local voice model, then rendering your workout..."
+        : "Rendering your workout into one audio track...",
+    );
 
     try {
       const buffer = await engine.renderWorkout(plan);
@@ -324,6 +331,24 @@ export default function AudioWorkoutStudio({
                   </div>
 
                   <div className="mt-4 space-y-3">
+                    <label className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
+                      {overlay.type === "voice"
+                        ? "Cue time (sec)"
+                        : "Start at (sec)"}
+                      <input
+                        type="number"
+                        min={0}
+                        max={segment.durationSeconds}
+                        value={overlay.startAtSec ?? 0}
+                        onChange={(event) =>
+                          updateOverlay(segment.id, overlay.id, {
+                            startAtSec: Number(event.target.value),
+                          })
+                        }
+                        className="w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:ring-2 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      />
+                    </label>
+
                     {overlay.type === "metronome" ? (
                       <label className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
                         BPM

@@ -27,9 +27,17 @@ export interface WorkoutPlan {
   segments: SegmentConfig[];
 }
 
+type KokoroTTS = import("kokoro-js").KokoroTTS;
+type GeneratedVoiceCue = {
+  samples: Float32Array<ArrayBuffer>;
+  sampleRate: number;
+};
+
 export class AudioWorkoutEngine {
   private context: AudioContext | null = null;
   private source: AudioBufferSourceNode | null = null;
+  private kokoroPromise: Promise<KokoroTTS> | null = null;
+  private voiceCueCache = new Map<string, Promise<GeneratedVoiceCue>>();
 
   private getContext() {
     if (!this.context) {
@@ -147,13 +155,53 @@ export class AudioWorkoutEngine {
     }
   }
 
-  private scheduleVoiceOverlay(
-    ctx: AudioContext | OfflineAudioContext,
+  private async getKokoroTTS() {
+    if (!this.kokoroPromise) {
+      this.kokoroPromise = import("kokoro-js").then(({ KokoroTTS }) =>
+        KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+          dtype: "q8",
+          device: "wasm",
+        }),
+      );
+    }
+
+    return this.kokoroPromise;
+  }
+
+  private async scheduleVoiceOverlay(
+    ctx: OfflineAudioContext,
     startTime: number,
     text: string,
   ) {
-    const frequency = text.length > 0 ? 440 + (text.length % 5) * 40 : 440;
-    this.scheduleTone(ctx, startTime, 0.14, frequency, 0.12);
+    const voice = "af_heart";
+    const speed = 1.08;
+    const cacheKey = `${voice}:${speed}:${text}`;
+
+    let voiceCuePromise = this.voiceCueCache.get(cacheKey);
+    if (!voiceCuePromise) {
+      voiceCuePromise = this.getKokoroTTS().then(async (tts) => {
+        const audio = await tts.generate(text, { voice, speed });
+        return {
+          samples: Float32Array.from(audio.audio),
+          sampleRate: audio.sampling_rate,
+        };
+      });
+      this.voiceCueCache.set(cacheKey, voiceCuePromise);
+    }
+
+    const { samples, sampleRate } = await voiceCuePromise;
+    const buffer = ctx.createBuffer(1, samples.length, sampleRate);
+    buffer.copyToChannel(samples, 0);
+
+    const source = ctx.createBufferSource();
+    const gainNode = ctx.createGain();
+    const masterGain = this.createMasterGain(ctx);
+
+    source.buffer = buffer;
+    gainNode.gain.value = 1;
+    source.connect(gainNode);
+    gainNode.connect(masterGain);
+    source.start(startTime);
   }
 
   async renderWorkout(plan: WorkoutPlan) {
@@ -200,11 +248,13 @@ export class AudioWorkoutEngine {
             );
             break;
           case "voice":
-            this.scheduleVoiceOverlay(
-              offlineContext,
-              overlayStartTime,
-              overlay.text ?? "Prompt",
-            );
+            if (overlayStartTime < segmentEndTime) {
+              await this.scheduleVoiceOverlay(
+                offlineContext,
+                overlayStartTime,
+                overlay.text?.trim() || "Prompt",
+              );
+            }
             break;
         }
       }
@@ -225,10 +275,6 @@ export class AudioWorkoutEngine {
 
     source.buffer = buffer;
     source.connect(masterGain);
-    source.onended = () => {
-      this.source = null;
-    };
-
     source.start(0);
     this.source = source;
 
