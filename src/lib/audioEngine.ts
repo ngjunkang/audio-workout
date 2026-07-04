@@ -3,33 +3,33 @@ export interface VoicePrompt {
   text: string;
 }
 
-export type OverlayType = "metronome" | "interval" | "countdown" | "audio";
+export type OverlayType = "metronome" | "interval" | "countdown" | "voice";
 
 export interface OverlayConfig {
   id: string;
   type: OverlayType;
   bpm?: number;
   intervalSeconds?: number;
+  targetTimeSec?: number;
+  leadSeconds?: number;
+  text?: string;
   startAtSec?: number;
-  repeatEverySec?: number;
-  label?: string;
-  audioBuffer?: AudioBuffer | null;
 }
 
-export interface WorkoutConfig {
+export interface SegmentConfig {
+  id: string;
+  label: string;
   durationSeconds: number;
   overlays: OverlayConfig[];
-  voicePrompts: VoicePrompt[];
+}
+
+export interface WorkoutPlan {
+  segments: SegmentConfig[];
 }
 
 export class AudioWorkoutEngine {
   private context: AudioContext | null = null;
   private source: AudioBufferSourceNode | null = null;
-  private scheduledNodes: AudioScheduledSourceNode[] = [];
-  private speechTimeouts: number[] = [];
-  private speechReady = false;
-  private speechGestureUnlocked = false;
-  private masterGain: GainNode | null = null;
 
   private getContext() {
     if (!this.context) {
@@ -56,20 +56,9 @@ export class AudioWorkoutEngine {
       }
 
       this.context = new AudioContextCtor();
-      this.masterGain = this.context.createGain();
-      this.masterGain.gain.value = 1;
-      this.masterGain.connect(this.context.destination);
     }
-    return this.context;
-  }
 
-  private ensureMasterGain(ctx: AudioContext) {
-    if (!this.masterGain) {
-      this.masterGain = ctx.createGain();
-      this.masterGain.gain.value = 1;
-      this.masterGain.connect(ctx.destination);
-    }
-    return this.masterGain;
+    return this.context;
   }
 
   async resumeContext() {
@@ -83,331 +72,171 @@ export class AudioWorkoutEngine {
     }
   }
 
-  async decodeAudioData(arrayBuffer: ArrayBuffer) {
-    const ctx = this.getContext();
-    return await ctx.decodeAudioData(arrayBuffer);
+  private createMasterGain(ctx: AudioContext | OfflineAudioContext) {
+    const gain = ctx.createGain();
+    gain.gain.value = 1;
+    gain.connect(ctx.destination);
+    return gain;
   }
 
-  async createSilentBuffer(durationSeconds: number) {
-    await this.resumeContext();
-    const ctx = this.getContext();
-    const length = Math.max(1, Math.floor(durationSeconds * ctx.sampleRate));
-    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
-    const channelData = buffer.getChannelData(0);
-    channelData.fill(0);
-    return buffer;
-  }
-
-  private scheduleOscillatorAtTime(
+  private scheduleTone(
+    ctx: AudioContext | OfflineAudioContext,
     startTime: number,
-    frequency = 880,
-    duration = 0.12,
+    duration: number,
+    frequency: number,
+    volume: number,
   ) {
-    const ctx = this.getContext();
     const oscillator = ctx.createOscillator();
     const gainNode = ctx.createGain();
-    const masterGain = this.ensureMasterGain(ctx);
+    const masterGain = this.createMasterGain(ctx);
 
     oscillator.type = "sine";
     oscillator.frequency.value = frequency;
 
     gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.008);
-    gainNode.gain.setValueAtTime(0.3, startTime + duration - 0.02);
+    gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.004);
     gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
 
     oscillator.connect(gainNode);
     gainNode.connect(masterGain);
-    oscillator.start(Math.max(startTime, ctx.currentTime + 0.02));
+    oscillator.start(startTime);
     oscillator.stop(startTime + duration);
-    this.scheduledNodes.push(oscillator);
   }
 
-  private scheduleWarmupBeep(startTime: number) {
-    const ctx = this.getContext();
-    const oscillator = ctx.createOscillator();
-    const gainNode = ctx.createGain();
-    const masterGain = this.ensureMasterGain(ctx);
-
-    oscillator.type = "sine";
-    oscillator.frequency.value = 1046.5;
-
-    gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(0.2, startTime + 0.01);
-    gainNode.gain.linearRampToValueAtTime(0, startTime + 0.12);
-
-    oscillator.connect(gainNode);
-    gainNode.connect(masterGain);
-    oscillator.start(Math.max(startTime, ctx.currentTime + 0.02));
-    oscillator.stop(startTime + 0.12);
-    this.scheduledNodes.push(oscillator);
-  }
-
-  private scheduleCountdown(startTime: number) {
-    const speeds = [3, 2, 1];
-    speeds.forEach((count, index) => {
-      const eventTime = startTime + index * 1.0;
-      this.scheduleOscillatorAtTime(eventTime, 880 - index * 120, 0.18);
-      this.scheduleVoicePromptAtTime(eventTime + 0.05, String(count));
-    });
-  }
-
-  private scheduleMetronome(startTime: number, duration: number, bpm: number) {
+  private scheduleMetronome(
+    ctx: AudioContext | OfflineAudioContext,
+    startTime: number,
+    endTime: number,
+    bpm: number,
+  ) {
     const interval = 60 / bpm;
     let current = startTime;
-    while (current < startTime + duration) {
-      this.scheduleOscillatorAtTime(current, 880, 0.08);
+    while (current < endTime) {
+      this.scheduleTone(ctx, current, 0.06, 880, 0.1);
       current += interval;
     }
   }
 
   private scheduleIntervalBeep(
+    ctx: AudioContext | OfflineAudioContext,
     startTime: number,
-    duration: number,
+    endTime: number,
     intervalSeconds: number,
   ) {
     if (intervalSeconds <= 0) return;
     let current = startTime + intervalSeconds;
-    while (current < startTime + duration) {
-      this.scheduleOscillatorAtTime(current, 620, 0.12);
+    while (current < endTime) {
+      this.scheduleTone(ctx, current, 0.1, 620, 0.12);
       current += intervalSeconds;
     }
   }
 
-  private scheduleAudioOverlay(
+  private scheduleCountdown(
+    ctx: AudioContext | OfflineAudioContext,
     startTime: number,
-    duration: number,
-    overlay: OverlayConfig,
+    targetTimeSec: number,
+    leadSeconds: number,
   ) {
-    if (!overlay.audioBuffer) return;
-
-    const ctx = this.getContext();
-    const offset = overlay.startAtSec ?? 0;
-    const repeatEverySec =
-      overlay.repeatEverySec && overlay.repeatEverySec > 0
-        ? overlay.repeatEverySec
-        : 0;
-    let current = startTime + offset;
-
-    while (current < startTime + duration) {
-      const source = ctx.createBufferSource();
-      source.buffer = overlay.audioBuffer;
-      source.connect(ctx.destination);
-      source.start(current);
-      this.scheduledNodes.push(source);
-      current += repeatEverySec > 0 ? repeatEverySec : duration + 1;
+    const countdownStart = Math.max(
+      startTime,
+      startTime + targetTimeSec - leadSeconds,
+    );
+    for (let count = leadSeconds; count >= 1; count -= 1) {
+      const tickTime = countdownStart + (leadSeconds - count);
+      this.scheduleTone(ctx, tickTime, 0.12, 880 - count * 60, 0.16);
     }
   }
 
-  private bindVoiceEvents() {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return;
-    }
-
-    const synth = window.speechSynthesis;
-    if (
-      (synth as SpeechSynthesis & { __voiceEventsBound?: boolean })
-        .__voiceEventsBound
-    ) {
-      return;
-    }
-
-    synth.onvoiceschanged = () => {
-      this.loadVoices();
-    };
-    (
-      synth as SpeechSynthesis & { __voiceEventsBound?: boolean }
-    ).__voiceEventsBound = true;
+  private scheduleVoiceOverlay(
+    ctx: AudioContext | OfflineAudioContext,
+    startTime: number,
+    text: string,
+  ) {
+    const frequency = text.length > 0 ? 440 + (text.length % 5) * 40 : 440;
+    this.scheduleTone(ctx, startTime, 0.14, frequency, 0.12);
   }
 
-  private loadVoices() {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return;
-    }
-
-    try {
-      const voices = window.speechSynthesis.getVoices();
-      this.speechReady = voices.length > 0;
-    } catch (error) {
-      console.warn("Speech synthesis voices could not be loaded:", error);
-      this.speechReady = false;
-    }
-  }
-
-  private resetSpeechQueue() {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return;
-    }
-
-    try {
-      const synth = window.speechSynthesis;
-      synth.cancel();
-      this.bindVoiceEvents();
-      this.loadVoices();
-    } catch (error) {
-      console.warn("Speech synthesis queue reset failed:", error);
-    }
-  }
-
-  private prepareSpeechSynthesis() {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return;
-    }
-
-    try {
-      const synth = window.speechSynthesis;
-      this.bindVoiceEvents();
-      this.loadVoices();
-
-      if (synth.paused) {
-        synth.resume();
-      }
-      this.speechReady = true;
-    } catch (error) {
-      console.warn("Speech synthesis could not be prepared:", error);
-      this.speechReady = false;
-    }
-  }
-
-  unlockSpeechFromGesture() {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return false;
-    }
-
-    this.resetSpeechQueue();
-    this.prepareSpeechSynthesis();
-
-    try {
-      const synth = window.speechSynthesis;
-      const utterance = new SpeechSynthesisUtterance("Ready");
-      utterance.lang = "en-US";
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-      utterance.onerror = (event) => {
-        console.warn("Speech synthesis failed:", event.error);
-      };
-
-      synth.speak(utterance);
-      this.speechGestureUnlocked = true;
-      this.speechReady = true;
-      return true;
-    } catch (error) {
-      console.warn("Speech synthesis could not be unlocked:", error);
-      return false;
-    }
-  }
-
-  private speakVoicePrompt(text: string) {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return false;
-    }
-
-    if (!this.speechGestureUnlocked) {
-      return false;
-    }
-
-    try {
-      const synth = window.speechSynthesis;
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "en-US";
-      utterance.rate = 1;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-      utterance.onerror = (event) => {
-        console.warn("Speech synthesis failed:", event.error);
-      };
-
-      synth.speak(utterance);
-      return true;
-    } catch (error) {
-      console.warn("Speech synthesis could not speak:", error);
-      return false;
-    }
-  }
-
-  private scheduleVoicePromptAtTime(startTime: number, text: string) {
-    const now = this.getContext().currentTime;
-    const delayMs = Math.max(0, (startTime - now) * 1000);
-
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      const timeoutId = window.setTimeout(() => {
-        const spoke = this.speakVoicePrompt(text);
-        if (!spoke) {
-          this.scheduleOscillatorAtTime(startTime, 440, 0.12);
-        }
-      }, delayMs);
-      this.speechTimeouts.push(timeoutId);
-    } else {
-      this.scheduleOscillatorAtTime(startTime, 440, 0.12);
-    }
-  }
-
-  private scheduleVoicePrompts(startTime: number, prompts: VoicePrompt[]) {
-    prompts.forEach((prompt) => {
-      if (prompt.timeSec >= 0) {
-        this.scheduleVoicePromptAtTime(startTime + prompt.timeSec, prompt.text);
-      }
-    });
-  }
-
-  async play(audioBuffer: AudioBuffer, config: WorkoutConfig) {
+  async renderWorkout(plan: WorkoutPlan) {
     await this.resumeContext();
-    await new Promise((resolve) => window.setTimeout(resolve, 120));
-    this.resetSpeechQueue();
-    this.prepareSpeechSynthesis();
 
+    const sampleRate = this.getContext().sampleRate;
+    const totalDuration = plan.segments.reduce(
+      (sum, segment) => sum + segment.durationSeconds,
+      0,
+    );
+    const totalFrames = Math.max(1, Math.floor(totalDuration * sampleRate));
+    const offlineContext = new OfflineAudioContext(2, totalFrames, sampleRate);
+
+    let timelineOffset = 0;
+    for (const segment of plan.segments) {
+      const segmentStartTime = timelineOffset;
+      const segmentEndTime = timelineOffset + segment.durationSeconds;
+
+      for (const overlay of segment.overlays) {
+        const overlayStartTime = segmentStartTime + (overlay.startAtSec ?? 0);
+        switch (overlay.type) {
+          case "metronome":
+            this.scheduleMetronome(
+              offlineContext,
+              overlayStartTime,
+              segmentEndTime,
+              overlay.bpm ?? 120,
+            );
+            break;
+          case "interval":
+            this.scheduleIntervalBeep(
+              offlineContext,
+              overlayStartTime,
+              segmentEndTime,
+              overlay.intervalSeconds ?? 30,
+            );
+            break;
+          case "countdown":
+            this.scheduleCountdown(
+              offlineContext,
+              overlayStartTime,
+              overlay.targetTimeSec ?? segment.durationSeconds,
+              overlay.leadSeconds ?? 5,
+            );
+            break;
+          case "voice":
+            this.scheduleVoiceOverlay(
+              offlineContext,
+              overlayStartTime,
+              overlay.text ?? "Prompt",
+            );
+            break;
+        }
+      }
+
+      timelineOffset = segmentEndTime;
+    }
+
+    return offlineContext.startRendering();
+  }
+
+  async playRenderedBuffer(buffer: AudioBuffer) {
+    await this.resumeContext();
     this.stop();
 
     const ctx = this.getContext();
-    const now = ctx.currentTime;
-    const playbackStartTime = Math.max(now + 0.1, now + 0.5);
-    this.scheduleWarmupBeep(playbackStartTime);
+    const source = ctx.createBufferSource();
+    const masterGain = this.createMasterGain(ctx);
 
-    for (const overlay of config.overlays) {
-      const overlayStartTime = playbackStartTime + (overlay.startAtSec ?? 0);
-      switch (overlay.type) {
-        case "metronome":
-          this.scheduleMetronome(
-            overlayStartTime,
-            config.durationSeconds,
-            overlay.bpm ?? 120,
-          );
-          break;
-        case "interval":
-          this.scheduleIntervalBeep(
-            overlayStartTime,
-            config.durationSeconds,
-            overlay.intervalSeconds ?? 30,
-          );
-          break;
-        case "countdown":
-          this.scheduleCountdown(playbackStartTime - 0.5);
-          break;
-        case "audio":
-          this.scheduleAudioOverlay(
-            overlayStartTime,
-            config.durationSeconds,
-            overlay,
-          );
-          break;
-      }
-    }
+    source.buffer = buffer;
+    source.connect(masterGain);
+    source.onended = () => {
+      this.source = null;
+    };
 
-    if (config.voicePrompts.length > 0) {
-      this.scheduleVoicePrompts(playbackStartTime, config.voicePrompts);
-    }
+    source.start(0);
+    this.source = source;
 
     return new Promise<void>((resolve) => {
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
       source.onended = () => {
-        this.clearScheduledEvents();
+        this.source = null;
         resolve();
       };
-      source.start(playbackStartTime);
-      this.source = source;
     });
   }
 
@@ -420,21 +249,5 @@ export class AudioWorkoutEngine {
       }
       this.source = null;
     }
-
-    this.scheduledNodes.forEach((node) => {
-      try {
-        node.stop();
-      } catch {
-        // ignore if already stopped or not yet scheduled
-      }
-    });
-    this.scheduledNodes = [];
-
-    this.clearScheduledEvents();
-  }
-
-  private clearScheduledEvents() {
-    this.speechTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
-    this.speechTimeouts = [];
   }
 }
